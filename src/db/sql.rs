@@ -30,6 +30,8 @@ pub const INSERT_ITEM: &'static str = r#"
             (?1, ?2, ?3)
 "#;
 
+//pub const 
+
 pub const DELETE_ITEM: &'static str = r#"
     DELETE FROM
         items
