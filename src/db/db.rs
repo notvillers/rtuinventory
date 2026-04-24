@@ -8,7 +8,8 @@ pub struct Item {
     pub id: u32,
     pub name: String,
     pub barcode: Option<String>,
-    pub serial: Option<String>
+    pub serial: Option<String>,
+    pub quantity: u32
 }
 
 impl From<(u32, InsertItem)> for Item {
@@ -17,7 +18,8 @@ impl From<(u32, InsertItem)> for Item {
             id: id,
             name: insert_item.name,
             barcode: insert_item.barcode,
-            serial: insert_item.serial
+            serial: insert_item.serial,
+            quantity: insert_item.quantity
         }
     }
 }
@@ -26,7 +28,8 @@ impl From<(u32, InsertItem)> for Item {
 pub struct InsertItem {
     pub name: String,
     pub barcode: Option<String>,
-    pub serial: Option<String>
+    pub serial: Option<String>,
+    pub quantity: u32
 }
 
 impl From<(String, Option<String>, Option<String>)> for InsertItem {
@@ -34,7 +37,8 @@ impl From<(String, Option<String>, Option<String>)> for InsertItem {
         Self {
             name: name,
             barcode: barcode,
-            serial: serial
+            serial: serial,
+            quantity: 0,
         }
     }
 }
@@ -48,6 +52,21 @@ pub fn connect_db() -> Connection {
                 CREATE_SQL,
                 []
             );
+            // Ensure quantity column exists for older DBs: check PRAGMA table_info
+            if let Ok(mut stmt) = conn_ok.prepare("PRAGMA table_info(items)") {
+                let mut has_qty = false;
+                let mut rows = stmt.query([]).unwrap();
+                while let Some(row) = rows.next().unwrap_or(None) {
+                    let col_name: String = row.get(1).unwrap_or_default();
+                    if col_name == "quantity" {
+                        has_qty = true;
+                        break;
+                    }
+                }
+                if !has_qty {
+                    let _ = conn_ok.execute("ALTER TABLE items ADD COLUMN quantity INTEGER DEFAULT 0", []);
+                }
+            }
             conn_ok
         },
         Err(e) => {
@@ -67,6 +86,7 @@ pub fn get_items(connection: &Connection) -> Vec<Item> {
                 name: row.get(1)?,
                 barcode: row.get(2)?,
                 serial: row.get(3)?,
+                quantity: row.get::<_, i64>(4)? as u32,
             })
         }).expect("query_map failed");
     let mut v = Vec::new();
@@ -85,7 +105,8 @@ pub fn try_insert_item(insert_item: &InsertItem, connection: &Connection) {
         params![
             insert_item.name,
             insert_item.barcode,
-            insert_item.serial
+            insert_item.serial,
+            insert_item.quantity as i64
         ]
     ).expect("insert failed");
 }
@@ -106,14 +127,24 @@ pub fn trim_or_none_value(value: &String) -> Option<String> {
 }
 
 
-pub fn try_create_item(name: &String, barcode: &String, serial: &String, connection: &Connection) -> ItemAdd {
+pub fn try_create_item(name: &String, barcode: &String, serial: &String, quantity: &String, connection: &Connection) -> ItemAdd {
     let name_insert = name.trim().to_string();
     if name_insert.is_empty() {
         return ItemAdd::Err("Name is required".to_string())
     };
     let barcode_insert = trim_or_none_value(barcode);
     let serial_insert = trim_or_none_value(serial);
-    let insert_item: InsertItem = (name_insert, barcode_insert, serial_insert).into();
+    let qty_trim = quantity.trim();
+    let qty_val: u32 = if qty_trim.is_empty() {
+        0
+    } else {
+        match qty_trim.parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => return ItemAdd::Err("Quantity must be a non-negative number".to_string()),
+        }
+    };
+    let mut insert_item: InsertItem = (name_insert, barcode_insert, serial_insert).into();
+    insert_item.quantity = qty_val;
     try_insert_item(&insert_item, &connection);
     let id = connection.last_insert_rowid() as u32;
     ItemAdd::Ok(
@@ -123,7 +154,11 @@ pub fn try_create_item(name: &String, barcode: &String, serial: &String, connect
 
 
 pub fn try_update_item(item: &Item, connection: &Connection) -> Item {
-    
+    connection.execute(
+        "UPDATE items SET name = ?1, barcode = ?2, serial = ?3, quantity = ?4 WHERE id = ?5",
+        params![item.name, item.barcode, item.serial, item.quantity as i64, item.id],
+    ).expect("update failed");
+    item.clone()
 }
 
 

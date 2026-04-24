@@ -6,7 +6,8 @@ pub const CREATE_SQL: &'static str = r#"
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         barcode TEXT,
-        serial TEXT
+        serial TEXT,
+        quantity INTEGER DEFAULT 0
     )
 "#;
 
@@ -15,7 +16,8 @@ pub const SELECT_ITEMS: &'static str = r#"
         id,
         name,
         barcode,
-        serial
+        serial,
+        quantity
     FROM
         items
     ORDER BY
@@ -25,9 +27,9 @@ pub const SELECT_ITEMS: &'static str = r#"
 pub const INSERT_ITEM: &'static str = r#"
     INSERT INTO
         items
-            (name, barcode, serial)
+            (name, barcode, serial, quantity)
         VALUES
-            (?1, ?2, ?3)
+            (?1, ?2, ?3, ?4)
 "#;
 
 //pub const 

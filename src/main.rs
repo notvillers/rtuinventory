@@ -5,7 +5,7 @@ use crossterm::{
     execute,
     event::{
         self,
-        Event, KeyCode, KeyEventKind
+        Event, KeyCode, KeyEventKind, KeyModifiers
     },
     terminal::{
         EnterAlternateScreen, LeaveAlternateScreen,
@@ -37,6 +37,7 @@ use crate::db::db::{
 enum Focus {
     Table,
     NameInput,
+    QuantityInput,
     BarcodeInput,
     SerialInput,
     ButtonAdd,
@@ -50,6 +51,7 @@ struct App {
     table_state: TableState,
     focus: Focus,
     name_input: String,
+    quantity_input: String,
     barcode_input: String,
     serial_input: String,
     status: String,
@@ -77,6 +79,7 @@ impl App {
             table_state,
             focus: Focus::NameInput,
             name_input: String::new(),
+            quantity_input: String::new(),
             barcode_input: String::new(),
             serial_input: String::new(),
             status: "Loaded from inventory.db".to_string(),
@@ -118,7 +121,8 @@ impl App {
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             Focus::Table => Focus::NameInput,
-            Focus::NameInput => Focus::BarcodeInput,
+            Focus::NameInput => Focus::QuantityInput,
+            Focus::QuantityInput => Focus::BarcodeInput,
             Focus::BarcodeInput => Focus::SerialInput,
             Focus::SerialInput => Focus::ButtonAdd,
             Focus::ButtonAdd => Focus::ButtonEdit,
@@ -127,9 +131,24 @@ impl App {
         };
     }
 
+    // Rotate focus backward (reverse of cycle_focus).
+    fn cycle_focus_back(&mut self) {
+        self.focus = match self.focus {
+            Focus::Table => Focus::ButtonDelete,
+            Focus::NameInput => Focus::Table,
+            Focus::QuantityInput => Focus::NameInput,
+            Focus::BarcodeInput => Focus::QuantityInput,
+            Focus::SerialInput => Focus::BarcodeInput,
+            Focus::ButtonAdd => Focus::SerialInput,
+            Focus::ButtonEdit => Focus::ButtonAdd,
+            Focus::ButtonDelete => Focus::ButtonEdit,
+        };
+    }
+
     fn active_input_mut(&mut self) -> Option<&mut String> {
         match self.focus {
             Focus::NameInput => Some(&mut self.name_input),
+            Focus::QuantityInput => Some(&mut self.quantity_input),
             Focus::BarcodeInput => Some(&mut self.barcode_input),
             Focus::SerialInput => Some(&mut self.serial_input),
             _ => None,
@@ -139,9 +158,10 @@ impl App {
     // Build a new item from the three fields and append it to the table.
     fn try_add_item(&mut self) {
         let item_add = match try_create_item(
-            &self.name_input, 
+            &self.name_input,
             &self.barcode_input,
             &self.serial_input,
+            &self.quantity_input,
             &self.conn
         ) {
             ItemAdd::Ok(item) => item,
@@ -152,6 +172,7 @@ impl App {
         };
         self.items.push(item_add);
         self.name_input.clear();
+        self.quantity_input.clear();
         self.barcode_input.clear();
         self.serial_input.clear();
         self.status = "Item added".to_string();
@@ -165,6 +186,7 @@ impl App {
             if i < self.items.len() {
                 let it = &self.items[i];
                 self.name_input = it.name.clone();
+                self.quantity_input = it.quantity.to_string();
                 self.barcode_input = it.barcode.clone().unwrap_or_default();
                 self.serial_input = it.serial.clone().unwrap_or_default();
                 self.editing_row = Some(i);
@@ -198,11 +220,20 @@ impl App {
                     Some(self.serial_input.trim().to_string())
                 };
                 let id = self.items[i].id;
+                let qty_trim = self.quantity_input.trim();
+                let qty_val: u32 = if qty_trim.is_empty() {
+                    0
+                } else {
+                    match qty_trim.parse::<u32>() {
+                        Ok(v) => v,
+                        Err(_) => { self.status = "Quantity must be a non-negative number".to_string(); return; }
+                    }
+                };
                 // Update DB
                 self.conn
                     .execute(
-                        "UPDATE items SET name = ?1, barcode = ?2, serial = ?3 WHERE id = ?4",
-                        params![name, barcode, serial, id],
+                        "UPDATE items SET name = ?1, barcode = ?2, serial = ?3, quantity = ?4 WHERE id = ?5",
+                        params![name, barcode, serial, qty_val as i64, id],
                     )
                     .expect("update failed");
                 self.items[i] = Item {
@@ -210,10 +241,12 @@ impl App {
                     name: name.to_string(),
                     barcode,
                     serial,
+                    quantity: qty_val,
                 };
                 self.status = "Item updated".to_string();
                 self.editing_row = None;
                 self.name_input.clear();
+                self.quantity_input.clear();
                 self.barcode_input.clear();
                 self.serial_input.clear();
                 self.focus = Focus::NameInput;
@@ -309,7 +342,14 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
 
             match key.code {
                 KeyCode::Char('q') => return Ok(()),
-                KeyCode::Tab => app.cycle_focus(),
+                KeyCode::Tab => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        app.cycle_focus_back();
+                    } else {
+                        app.cycle_focus();
+                    }
+                }
+                KeyCode::BackTab => app.cycle_focus_back(),
                 KeyCode::Up if app.focus == Focus::Table => app.prev_row(),
                 KeyCode::Down if app.focus == Focus::Table => app.next_row(),
                 KeyCode::Backspace => {
@@ -363,7 +403,7 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
         ])
         .split(chunks[1]);
 
-    let header = Row::new(vec!["ID", "Name", "Barcode", "Serial"]).style(
+    let header = Row::new(vec!["ID", "Name", "Qty", "Barcode", "Serial"]).style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
@@ -373,6 +413,7 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
         Row::new(vec![
             Cell::from(item.id.to_string()),
             Cell::from(item.name.clone()),
+            Cell::from(item.quantity.to_string()),
             Cell::from(item.barcode.clone().unwrap_or_else(|| "-".to_string())),
             Cell::from(item.serial.clone().unwrap_or_else(|| "-".to_string())),
         ])
@@ -386,6 +427,7 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
         [
             Constraint::Length(6),
             Constraint::Percentage(30),
+            Constraint::Length(6),
             Constraint::Percentage(32),
             Constraint::Percentage(32),
         ],
@@ -408,6 +450,13 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
         name_block = name_block.border_style(Style::default().fg(Color::Green));
     }
     let name_input = Paragraph::new(app.name_input.as_str()).block(name_block);
+
+    let qty_title = if app.focus == Focus::QuantityInput { "Qty (active)" } else { "Qty" };
+    let mut qty_block = Block::default().borders(Borders::ALL).title(qty_title);
+    if app.focus == Focus::QuantityInput {
+        qty_block = qty_block.border_style(Style::default().fg(Color::Green));
+    }
+    let qty_input = Paragraph::new(app.quantity_input.as_str()).block(qty_block);
 
     let barcode_title = if app.focus == Focus::BarcodeInput {
         "Barcode (active, optional)"
@@ -460,7 +509,13 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
     // Render table in the flexible top chunk so it grows/shrinks with terminal height.
     frame.render_stateful_widget(table, chunks[0], &mut app.table_state);
     // Render bottom fixed rows from bottom_chunks.
-    frame.render_widget(name_input, bottom_chunks[0]);
+    // Render name and quantity side-by-side on the first bottom row.
+    let name_qty_row = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(80), Constraint::Length(8)])
+        .split(bottom_chunks[0]);
+    frame.render_widget(name_input, name_qty_row[0]);
+    frame.render_widget(qty_input, name_qty_row[1]);
     frame.render_widget(barcode_input, bottom_chunks[1]);
     frame.render_widget(serial_input, bottom_chunks[2]);
     // render three buttons horizontally in the single bottom_chunks[3] area
