@@ -22,14 +22,17 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, config::DbConfig, params};
 
 mod db;
 
-use crate::db::db::{
-    Item, ItemAdd,
-    connect_db,
-    get_items, try_create_item, try_delete_item
+use crate::db::{
+    sql::DB_NAME,
+    db::{
+        Item, ItemAdd,
+        connect_db,
+        get_items, try_create_item, try_delete_item
+    }
 };
 
 // Which widget currently receives keyboard input.
@@ -82,7 +85,7 @@ impl App {
             quantity_input: String::new(),
             barcode_input: String::new(),
             serial_input: String::new(),
-            status: "Loaded from inventory.db".to_string(),
+            status: format!("Loaded from {0}", DB_NAME).to_string(),
             conn,
             editing_row: None,
             pending_delete: None,
