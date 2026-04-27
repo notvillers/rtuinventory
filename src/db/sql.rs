@@ -21,7 +21,7 @@ pub const SELECT_ITEMS: &'static str = r#"
     FROM
         items
     ORDER BY
-        id ASC
+        name COLLATE NOCASE ASC
 "#;
 
 pub const INSERT_ITEM: &'static str = r#"
