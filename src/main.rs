@@ -22,7 +22,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 
-use rusqlite::{Connection, config::DbConfig, params};
+use rusqlite::{Connection, params};
 
 mod db;
 

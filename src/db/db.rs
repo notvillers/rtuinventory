@@ -153,15 +153,6 @@ pub fn try_create_item(name: &String, barcode: &String, serial: &String, quantit
 }
 
 
-pub fn try_update_item(item: &Item, connection: &Connection) -> Item {
-    connection.execute(
-        "UPDATE items SET name = ?1, barcode = ?2, serial = ?3, quantity = ?4 WHERE id = ?5",
-        params![item.name, item.barcode, item.serial, item.quantity as i64, item.id],
-    ).expect("update failed");
-    item.clone()
-}
-
-
 pub fn try_delete_item(id: &u32, connection: &Connection) {
     connection.execute(
         DELETE_ITEM,
