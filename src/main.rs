@@ -41,6 +41,7 @@ enum Focus {
     Table,
     NameInput,
     QuantityInput,
+    LocationInput,
     BarcodeInput,
     SerialInput,
     ButtonAdd,
@@ -55,6 +56,7 @@ struct App {
     focus: Focus,
     name_input: String,
     quantity_input: String,
+    location_input: String,
     barcode_input: String,
     serial_input: String,
     status: String,
@@ -83,6 +85,7 @@ impl App {
             focus: Focus::NameInput,
             name_input: String::new(),
             quantity_input: String::new(),
+            location_input: String::new(),
             barcode_input: String::new(),
             serial_input: String::new(),
             status: format!("Loaded from {0}", DB_NAME).to_string(),
@@ -125,7 +128,8 @@ impl App {
         self.focus = match self.focus {
             Focus::Table => Focus::NameInput,
             Focus::NameInput => Focus::QuantityInput,
-            Focus::QuantityInput => Focus::BarcodeInput,
+            Focus::QuantityInput => Focus::LocationInput,
+            Focus::LocationInput => Focus::BarcodeInput,
             Focus::BarcodeInput => Focus::SerialInput,
             Focus::SerialInput => Focus::ButtonAdd,
             Focus::ButtonAdd => Focus::ButtonEdit,
@@ -140,7 +144,8 @@ impl App {
             Focus::Table => Focus::ButtonDelete,
             Focus::NameInput => Focus::Table,
             Focus::QuantityInput => Focus::NameInput,
-            Focus::BarcodeInput => Focus::QuantityInput,
+            Focus::LocationInput => Focus::QuantityInput,
+            Focus::BarcodeInput => Focus::LocationInput,
             Focus::SerialInput => Focus::BarcodeInput,
             Focus::ButtonAdd => Focus::SerialInput,
             Focus::ButtonEdit => Focus::ButtonAdd,
@@ -152,6 +157,7 @@ impl App {
         match self.focus {
             Focus::NameInput => Some(&mut self.name_input),
             Focus::QuantityInput => Some(&mut self.quantity_input),
+            Focus::LocationInput => Some(&mut self.location_input),
             Focus::BarcodeInput => Some(&mut self.barcode_input),
             Focus::SerialInput => Some(&mut self.serial_input),
             _ => None,
@@ -164,6 +170,7 @@ impl App {
             &self.name_input,
             &self.barcode_input,
             &self.serial_input,
+            &self.location_input,
             &self.quantity_input,
             &self.conn
         ) {
@@ -176,6 +183,7 @@ impl App {
         self.items.push(item_add);
         self.name_input.clear();
         self.quantity_input.clear();
+        self.location_input.clear();
         self.barcode_input.clear();
         self.serial_input.clear();
         self.status = "Item added".to_string();
@@ -190,6 +198,7 @@ impl App {
                 let it = &self.items[i];
                 self.name_input = it.name.clone();
                 self.quantity_input = it.quantity.to_string();
+                    self.location_input = it.location.clone().unwrap_or_default();
                 self.barcode_input = it.barcode.clone().unwrap_or_default();
                 self.serial_input = it.serial.clone().unwrap_or_default();
                 self.editing_row = Some(i);
@@ -222,6 +231,11 @@ impl App {
                 } else {
                     Some(self.serial_input.trim().to_string())
                 };
+                let location = if self.location_input.trim().is_empty() {
+                    None
+                } else {
+                    Some(self.location_input.trim().to_string())
+                };
                 let id = self.items[i].id;
                 let qty_trim = self.quantity_input.trim();
                 let qty_val: u32 = if qty_trim.is_empty() {
@@ -232,11 +246,11 @@ impl App {
                         Err(_) => { self.status = "Quantity must be a non-negative number".to_string(); return; }
                     }
                 };
-                // Update DB
+                // Update DB (use location from input)
                 self.conn
                     .execute(
-                        "UPDATE items SET name = ?1, barcode = ?2, serial = ?3, quantity = ?4 WHERE id = ?5",
-                        params![name, barcode, serial, qty_val as i64, id],
+                        "UPDATE items SET name = ?1, barcode = ?2, serial = ?3, location = ?4, quantity = ?5 WHERE id = ?6",
+                        params![name, barcode, serial, location, qty_val as i64, id],
                     )
                     .expect("update failed");
                 self.items[i] = Item {
@@ -244,12 +258,14 @@ impl App {
                     name: name.to_string(),
                     barcode,
                     serial,
+                    location,
                     quantity: qty_val,
                 };
                 self.status = "Item updated".to_string();
                 self.editing_row = None;
                 self.name_input.clear();
                 self.quantity_input.clear();
+                self.location_input.clear();
                 self.barcode_input.clear();
                 self.serial_input.clear();
                 self.focus = Focus::NameInput;
@@ -406,7 +422,7 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
         ])
         .split(chunks[1]);
 
-    let header = Row::new(vec!["ID", "Name", "Qty", "Barcode", "Serial"]).style(
+    let header = Row::new(vec!["ID", "Name", "Qty", "Location", "Barcode", "Serial"]).style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
@@ -417,6 +433,7 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
             Cell::from(item.id.to_string()),
             Cell::from(item.name.clone()),
             Cell::from(item.quantity.to_string()),
+            Cell::from(item.location.clone().unwrap_or_else(|| "-".to_string())),
             Cell::from(item.barcode.clone().unwrap_or_else(|| "-".to_string())),
             Cell::from(item.serial.clone().unwrap_or_else(|| "-".to_string())),
         ])
@@ -431,8 +448,9 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
             Constraint::Length(6),
             Constraint::Percentage(30),
             Constraint::Length(6),
-            Constraint::Percentage(32),
-            Constraint::Percentage(32),
+            Constraint::Percentage(16),
+            Constraint::Percentage(24),
+            Constraint::Percentage(24),
         ],
     )
     .header(header)
@@ -479,6 +497,13 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
     }
     let serial_input = Paragraph::new(app.serial_input.as_str()).block(serial_block);
 
+    let location_title = if app.focus == Focus::LocationInput { "Location (active, optional)" } else { "Location (optional)" };
+    let mut location_block = Block::default().borders(Borders::ALL).title(location_title);
+    if app.focus == Focus::LocationInput {
+        location_block = location_block.border_style(Style::default().fg(Color::Green));
+    }
+    let location_input = Paragraph::new(app.location_input.as_str()).block(location_block);
+
     // Button style changes when focused to simulate "active" state.
     // Buttons: Add/Save, Edit, Delete - each has its own focus state and style.
     let add_label = if app.editing_row.is_some() { "[ Save ]" } else { "[ Add Item ]" };
@@ -519,8 +544,13 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
         .split(bottom_chunks[0]);
     frame.render_widget(name_input, name_qty_row[0]);
     frame.render_widget(qty_input, name_qty_row[1]);
-    frame.render_widget(barcode_input, bottom_chunks[1]);
-    frame.render_widget(serial_input, bottom_chunks[2]);
+    frame.render_widget(location_input, bottom_chunks[1]);
+    let barcode_serial_row = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(bottom_chunks[2]);
+    frame.render_widget(barcode_input, barcode_serial_row[0]);
+    frame.render_widget(serial_input, barcode_serial_row[1]);
     // render three buttons horizontally in the single bottom_chunks[3] area
     let button_row = Layout::default()
         .direction(Direction::Horizontal)

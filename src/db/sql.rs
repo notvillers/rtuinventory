@@ -7,6 +7,7 @@ pub const CREATE_SQL: &'static str = r#"
         name TEXT NOT NULL,
         barcode TEXT,
         serial TEXT,
+        location TEXT,
         quantity INTEGER DEFAULT 0
     )
 "#;
@@ -17,6 +18,7 @@ pub const SELECT_ITEMS: &'static str = r#"
         name,
         barcode,
         serial,
+        location,
         quantity
     FROM
         items
@@ -27,9 +29,9 @@ pub const SELECT_ITEMS: &'static str = r#"
 pub const INSERT_ITEM: &'static str = r#"
     INSERT INTO
         items
-            (name, barcode, serial, quantity)
+            (name, barcode, serial, location, quantity)
         VALUES
-            (?1, ?2, ?3, ?4)
+            (?1, ?2, ?3, ?4, ?5)
 "#;
 
 //pub const 
