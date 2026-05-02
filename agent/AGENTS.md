@@ -3,6 +3,7 @@
 ## Quick commands
 
 **Build & verify:**
+- `cargo check` – verify code compiles without building
 - `cargo build` – compile and catch errors
 - `cargo run` – run the TUI
 - `cargo test` – runs 0 tests (no committed tests)
