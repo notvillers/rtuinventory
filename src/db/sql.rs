@@ -1,5 +1,5 @@
 // SQLs
-pub const DB_NAME: &'static str = "inventory.db";
+pub const DB_NAME: &'static str = "inventory.sqlite3";
 
 pub const CREATE_SQL: &'static str = r#"
     CREATE TABLE IF NOT EXISTS items (
