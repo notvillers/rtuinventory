@@ -36,3 +36,9 @@
 - Settings screen uses `SettingsFocus` enum to route keyboard input to the recent list or new database input field.
 - Edit mode is controlled by `editing_row`, which turns the add button into save. Delete is intentionally two-step through `pending_delete`.
 - Global shortcuts: `Ctrl+S` toggles between screens, `Esc` closes settings, `q` quits the app.
+
+## Git commit policy
+
+- **Only commit and push if you edit `.md` files (documentation).**
+- If your changes include any code files (`.rs`, `.toml`, `Cargo.lock`, etc.), **do not commit or push**—leave them for the user to review and commit manually.
+- This keeps the repository clean and gives the user full control over code changes, while documentation updates are safe to auto-commit.

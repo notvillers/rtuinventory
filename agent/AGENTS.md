@@ -96,3 +96,9 @@
 - All changes verified through `cargo build` and `cargo run`.
 - No external code generation or migration tools.
 - Settings are user-persisted across sessions.
+
+## Git commit policy
+
+- **Only commit and push if you edit `.md` files (documentation).**
+- If your changes include any code files (`.rs`, `.toml`, `Cargo.lock`, etc.), **do not commit or push**—leave them for the user to review and commit manually.
+- This keeps the repository clean and gives the user full control over code changes, while documentation updates are safe to auto-commit.
