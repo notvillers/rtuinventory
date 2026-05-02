@@ -1,104 +1,91 @@
 # AGENTS guide for rtuinventory
 
-## Quick reference
+## Quick commands
 
-**Build & test:**
+**Build & verify:**
 - `cargo build` – compile and catch errors
 - `cargo run` – run the TUI
-- `cargo test` – no committed tests; runs 0 tests
+- `cargo test` – runs 0 tests (no committed tests)
 - `cargo fmt` – format code
-- `cargo fmt -- --check` – formatting check only
+- `cargo fmt -- --check` – formatting check
 
-## Architecture at a glance
+## Architecture
 
 **Single-binary TUI with two screens:**
-- `src/main.rs` owns terminal lifecycle, event loop, focus routing, and rendering of both Inventory and Settings screens.
-- `App` struct holds: `Vec<Item>`, table/list state, input fields, status, edit/delete mode, current `Connection`, `Settings` object, current `Screen`, and settings-specific state.
-- Startup: `App::new()` → `Settings::load()` → `connect_db(path)` → schema setup → `get_items()`.
-- Two screens (Screen enum): `Inventory` (default) and `Settings`.
-- Keyboard globals: `Ctrl+S` toggles screens, `Esc` closes settings, `q` quits.
+- `src/main.rs` owns terminal lifecycle, event loop, focus routing, and rendering
+- `App` struct holds: `Vec<Item>`, table/list state, input fields, status, edit/delete mode, `Connection`, `Settings`, `Screen`, settings state
+- Startup: `App::new()` → `Settings::load()` → `connect_db(path)` → schema setup → `get_items()`
+- Screens: `Inventory` (default) and `Settings`
+- Keyboard: `Ctrl+S` toggles screens, `Esc` closes settings, `q` quits
 
-**Persistence layer (`src/db/`):**
-- `sql.rs` – SQL constants (CREATE, SELECT, INSERT, DELETE).
-- `db.rs` – `Item` and `InsertItem` types, `connect_db(path)`, `get_items()`, `try_create_item()`, `try_delete_item()`.
-- `mod.rs` – module wiring only.
+**Persistence (`src/db/`):**
+- `sql.rs` – SQL constants (CREATE, SELECT, INSERT, DELETE)
+- `db.rs` – `Item` types, `connect_db(path)`, `get_items()`, `try_create_item()`, `try_delete_item()`
+- `mod.rs` – module wiring only
 
 **Settings (`src/settings.rs`):**
-- `Settings` struct with `DatabaseSettings` (path, recent list).
-- `Settings::load()` reads `app-settings.toml` or returns defaults.
-- `set_database_path()` updates current path, maintains recent list (max 10), saves to file.
-- Default database: `inventory.sqlite3`.
-- TOML format: simple, human-editable.
+- `Settings::load()` reads `app-settings.toml` or returns defaults
+- `set_database_path()` updates path, maintains recent list (max 10), saves to file
+- Default database: `inventory.sqlite3`
+- TOML format: simple, human-editable
 
-**No service layer:** Add/edit/delete operations write to SQLite and sync `app.items` in the same handler.
+**No service layer:** Add/edit/delete write to SQLite and sync `app.items` in same handler
 
-**Inventory layout:** Single table (top, flexible) + bottom control area (name/qty, location, barcode/serial, buttons, help).
+## Critical rules
 
-**Settings layout:** Recent databases list (top) + new database path input (bottom).
-
-## When making changes
-
-**Terminal lifecycle (critical):**
+**Terminal lifecycle (unbalanced → bad state):**
 - `enable_raw_mode` ↔ `disable_raw_mode`
 - `EnterAlternateScreen` ↔ `LeaveAlternateScreen`
 - `show_cursor` on exit
-- If unbalanced, terminal left in bad state.
+- If unbalanced, terminal left in bad state
 
-**Database changes:**
-- Always use `connect_db(path)` with the path parameter (not hardcoded).
-- Always use `get_items()`, `try_create_item()`, `try_delete_item()`.
-- Schema compatibility handled inside `connect_db()` via `PRAGMA table_info(...)`.
-- Never duplicate schema setup.
+**Database:**
+- Always use `connect_db(path)` with parameter (not hardcoded)
+- Always use `get_items()`, `try_create_item()`, `try_delete_item()`
+- Schema compatibility via `PRAGMA table_info(...)` inside `connect_db()`
+- Never duplicate schema setup
 
 **Screen switching:**
-- Use `Screen` enum to route rendering and input handling.
-- `draw_ui()` dispatches to `draw_inventory_ui()` or `draw_settings_ui()`.
-- `handle_inventory_input()` and `handle_settings_input()` route keyboard.
+- Use `Screen` enum for routing
+- `draw_ui()` dispatches to `draw_inventory_ui()` or `draw_settings_ui()`
+- `handle_inventory_input()` and `handle_settings_input()` route keyboard
 
 **Database switching:**
-- Call `switch_database(path)` in settings handlers.
-- This: closes old connection, updates settings, reconnects, reloads items, clears UI state.
-- Persists path to `app-settings.toml`.
+- `switch_database(path)` in settings handlers
+- Closes old connection, updates settings, reconnects, reloads items, clears UI state
+- Persists path to `app-settings.toml`
 
 **UI state sync:**
-- `app.items` is the in-memory source of truth for rendering.
-- If you mutate SQLite, update the corresponding `app.items` entry in the same handler.
-- When switching databases, wipe all input fields, editing state, and delete confirmations.
+- `app.items` is in-memory source of truth
+- Mutate SQLite → update matching `app.items` entry in same handler
+- Switching databases → wipe editing state, delete confirmations, input fields
 
-**Input normalization:**
+## Input normalization
+
 - Empty `barcode`, `serial`, `location` → `None`
-- Quantity parsed as `u32`; blank quantity = `0`
+- Quantity parsed as `u32`; blank = `0`
 
-**Table selection:**
-- Use `TableState::default()` and `TableState::select(Some(index))`.
-- Keep selection valid after add/delete (adjust index if needed).
+## Table selection
 
-**Focus and keyboard:**
-- Inventory screen: `Focus` enum routes input; `active_input_mut()` returns mutable ref to focused field.
-- Settings screen: `SettingsFocus` enum routes input to list or text field.
-- When adding a new control, update:
-  1. Focus cycling or screen-specific routing
-  2. Keyboard handling in `handle_inventory_input()` or `handle_settings_input()`
-  3. Visual styling in `draw_inventory_ui()` or `draw_settings_ui()`
+- `TableState::default()` and `TableState::select(Some(index))`
+- Keep selection valid after add/delete (adjust index if needed)
 
-**Edit and delete:**
-- Edit mode: `editing_row` field transforms button and pre-fills inputs.
-- Delete mode: Two-step via `pending_delete` (request → confirm y/n).
+## Focus & keyboard
 
-**Settings file:**
-- Loaded once at startup via `Settings::load()`.
-- Saved on every `set_database_path()` call.
-- If missing or corrupted, defaults are used.
-- Located at `app-settings.toml` in the working directory.
+**Inventory screen:**
+- `Focus` enum routes input; `active_input_mut()` returns mutable ref
+- Add control → update focus cycling, keyboard handling, visual styling
 
-## Notes
-- No CI workflows or pre-commit hooks.
-- All changes verified through `cargo build` and `cargo run`.
-- No external code generation or migration tools.
-- Settings are user-persisted across sessions.
+**Settings screen:**
+- `SettingsFocus` enum routes to list or text field
+
+## Edit & delete
+
+- Edit mode: `editing_row` transforms button and pre-fills inputs
+- Delete: two-step via `pending_delete` (request → confirm y/n)
 
 ## Git commit policy
 
-- **Only commit and push if you edit `.md` files (documentation).**
-- If your changes include any code files (`.rs`, `.toml`, `Cargo.lock`, etc.), **do not commit or push**—leave them for the user to review and commit manually.
-- This keeps the repository clean and gives the user full control over code changes, while documentation updates are safe to auto-commit.
+- **Only commit/push if editing `.md` files**
+- **Do NOT commit/push if editing code files** (`.rs`, `.toml`, `Cargo.lock`, etc.)
+- User handles code changes manually; docs safe to auto-commit

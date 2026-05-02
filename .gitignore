@@ -22,3 +22,4 @@ target/
 
 *.db
 *.sqlite3
+opencode.json
