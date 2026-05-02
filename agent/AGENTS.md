@@ -1,41 +1,68 @@
 # AGENTS guide for rtuinventory
 
-## Purpose
-Quick, actionable guidance so that agents will not miss any important repository details.
+## Quick reference
 
-## Project Overview
-- Rust CLI TUI powered by `ratatui` and `crossterm`.
-- SQLite database `inventory.sqlite3` resides in the repository root.
-- No tests exist; `cargo test` will succeed immediately.
+**Build & test:**
+- `cargo build` – compile and catch errors
+- `cargo run` – run the TUI
+- `cargo test` – no committed tests; runs 0 tests
+- `cargo fmt` – format code
+- `cargo fmt -- --check` – formatting check only
 
-## Key files
-- `src/main.rs` – TUI entry point, event loop, rendering.
-- `src/db/db.rs` – Schema helper, `connect_db`, CRUD helpers, and the `Item` model.
-- `src/db/sql.rs` – SQL string constants.
-- `Cargo.toml` – Dependencies: `crossterm = 0.28`, `ratatui = 0.29`, `rusqlite = { version = 0.29, features = ["bundled"] }`.
+## Architecture at a glance
 
-## Build & Run
-```
-cargo build
-cargo run
-```
-The binary creates/opens `inventory.sqlite3` automatically; deleting the file resets the data.
+**Single-binary TUI architecture:**
+- `src/main.rs` owns terminal lifecycle (`enable_raw_mode`, `EnterAlternateScreen`, etc.), the event loop, focus routing, and all widget rendering.
+- `App` struct holds runtime state: `Vec<Item>`, table selection, input fields, status, edit/delete mode, and the live SQLite connection.
+- Startup: `App::new()` → `connect_db()` → opens `inventory.sqlite3` → schema setup → `get_items()` loads all items into memory.
 
-## Common developer tasks
-- **Add a package / file**: run `cargo build` to confirm no compilation errors. If you wish to format, run `cargo fmt`.
-- **Edit UI layout**: keep terminal initialization (`enable_raw_mode`, `EnterAlternateScreen`, `show_cursor`) intact; modifying `src/main.rs` may break control flow.
-- **Database schema changes**: always use functions in `src/db/db.rs`; do not edit `CREATE_SQL` directly unless you intend a migration.
+**Persistence layer (`src/db/`):**
+- `sql.rs` – SQL constants (CREATE, SELECT, INSERT, DELETE).
+- `db.rs` – `Item` and `InsertItem` types, `connect_db()`, `get_items()`, `try_create_item()`, `try_delete_item()`.
+- `mod.rs` – module wiring only.
 
-## Verification
-1. `cargo build` – ensures syntax and dependencies.
-2. `cargo run` – test that the TUI behaves as expected.
-3. `cargo fmt` (if rustfmt is installed) – keep code style consistent.
+**No service layer:** Add/edit/delete operations write to SQLite and sync `app.items` in the same handler. The in-memory vector is the source of truth for rendering.
 
-## Repository‑specific conventions
-- No CI workflows or pre‑commit hooks are defined.
-- No tests; all changes are verified through the binary.
+**Layout:** Single table (top, flexible) + bottom control area (name/qty inputs, location input, barcode/serial inputs, buttons, status/help).
+
+## When making changes
+
+**Terminal lifecycle (critical):**
+- `enable_raw_mode` ↔ `disable_raw_mode`
+- `EnterAlternateScreen` ↔ `LeaveAlternateScreen`
+- `show_cursor` on exit
+- If these become unbalanced, the terminal is left in a bad state.
+
+**Database changes:**
+- Always use `connect_db()`, `get_items()`, `try_create_item()`, `try_delete_item()`.
+- Schema compatibility for older DBs is built into `connect_db()` via `PRAGMA table_info(...)`.
+- Never duplicate schema setup logic.
+
+**UI state sync:**
+- `app.items` is the in-memory source of truth for rendering.
+- If you mutate SQLite, update the corresponding `app.items` entry in the same handler.
+
+**Input normalization:**
+- Empty `barcode`, `serial`, `location` → `None`
+- Quantity parsed as `u32`; blank quantity = `0`
+
+**Table selection:**
+- Use `TableState::default()` and `TableState::select(Some(index))`.
+- Keep selection valid after add/delete (adjust index if needed).
+
+**Focus and keyboard:**
+- `Focus` enum routes keyboard input to the active widget.
+- `active_input_mut()` returns mutable ref to the focused input field.
+- When adding a new interactive control, update:
+  1. Focus cycling (`cycle_focus()`, `cycle_focus_back()`)
+  2. Enter-key routing in `run_app()`
+  3. Visual focus styling in `draw_ui()`
+
+**Edit and delete:**
+- Edit mode: `editing_row` field transforms "Add Item" button into "Save" and pre-fills input fields.
+- Delete mode: Two-step flow via `pending_delete` (request → confirm y/n).
+
+## Notes
+- No CI workflows or pre-commit hooks.
+- All changes verified through `cargo build` and `cargo run`.
 - No external code generation or migration tools.
-
-## Contact / PR guidelines
-- Keep commits focused and small.
-- Describe the intent in the PR title and body.
