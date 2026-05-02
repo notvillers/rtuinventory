@@ -529,8 +529,8 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
     let del_button = Paragraph::new("[ Delete ]").style(del_style).block(Block::default().borders(Borders::ALL).title("Delete"));
 
     let help = Paragraph::new(Line::from(format!(
-        "{} | Focus: {:?} | Tab/Enter: next focus | Up/Down: move row | q: quit",
-        app.status, app.focus
+        "{} | Tab/Enter: next focus | Up/Down: move row | q: quit",
+        app.status
     )));
 
     // Paint each widget into its assigned region.
