@@ -1,7 +1,7 @@
 // DB data
 use std::process;
 use rusqlite::{Connection, params};
-use crate::db::sql::{DB_NAME, CREATE_SQL, SELECT_ITEMS, INSERT_ITEM, DELETE_ITEM};
+use crate::db::sql::{CREATE_SQL, SELECT_ITEMS, INSERT_ITEM, DELETE_ITEM};
 
 #[derive(Clone)]
 pub struct Item {
@@ -10,7 +10,7 @@ pub struct Item {
     pub barcode: Option<String>,
     pub serial: Option<String>,
     pub location: Option<String>,
-    pub quantity: u32
+    pub quantity: u32,
 }
 
 impl From<(u32, InsertItem)> for Item {
@@ -32,7 +32,7 @@ pub struct InsertItem {
     pub barcode: Option<String>,
     pub serial: Option<String>,
     pub location: Option<String>,
-    pub quantity: u32
+    pub quantity: u32,
 }
 
 impl From<(String, Option<String>, Option<String>, Option<String>)> for InsertItem {
@@ -48,14 +48,11 @@ impl From<(String, Option<String>, Option<String>, Option<String>)> for InsertIt
 }
 
 
-pub fn connect_db() -> Connection {
-    let connenction = Connection::open(DB_NAME);
-    match connenction {
+pub fn connect_db(db_path: &str) -> Connection {
+    let connection = Connection::open(db_path);
+    match connection {
         Ok(conn_ok) => {
-            let _ = conn_ok.execute(
-                CREATE_SQL,
-                []
-            );
+            let _ = conn_ok.execute(CREATE_SQL, []);
             // Ensure quantity column exists for older DBs: check PRAGMA table_info
             if let Ok(mut stmt) = conn_ok.prepare("PRAGMA table_info(items)") {
                 let mut has_qty = false;
@@ -69,7 +66,10 @@ pub fn connect_db() -> Connection {
                     }
                 }
                 if !has_qty {
-                    let _ = conn_ok.execute("ALTER TABLE items ADD COLUMN quantity INTEGER DEFAULT 0", []);
+                    let _ = conn_ok.execute(
+                        "ALTER TABLE items ADD COLUMN quantity INTEGER DEFAULT 0",
+                        [],
+                    );
                 }
                 // Re-query to detect location (or reuse earlier rows by not breaking on quantity)
                 if let Ok(mut stmt2) = conn_ok.prepare("PRAGMA table_info(items)") {
@@ -87,9 +87,9 @@ pub fn connect_db() -> Connection {
                 }
             }
             conn_ok
-        },
+        }
         Err(e) => {
-            eprintln!("Error while creating connection to '{}': {}", DB_NAME, e);
+            eprintln!("Error while creating connection to '{}': {}", db_path, e);
             process::exit(1)
         }
     }
@@ -108,7 +108,8 @@ pub fn get_items(connection: &Connection) -> Vec<Item> {
                 location: row.get(4)?,
                 quantity: row.get::<_, i64>(5)? as u32,
             })
-        }).expect("query_map failed");
+        })
+        .expect("query_map failed");
     let mut v = Vec::new();
     for it in item_iter {
         if let Ok(it) = it {
@@ -120,38 +121,47 @@ pub fn get_items(connection: &Connection) -> Vec<Item> {
 
 
 pub fn try_insert_item(insert_item: &InsertItem, connection: &Connection) {
-    connection.execute(
-        INSERT_ITEM,
-        params![
-            insert_item.name,
-            insert_item.barcode,
-            insert_item.serial,
-            insert_item.location,
-            insert_item.quantity as i64
-        ]
-    ).expect("insert failed");
+    connection
+        .execute(
+            INSERT_ITEM,
+            params![
+                insert_item.name,
+                insert_item.barcode,
+                insert_item.serial,
+                insert_item.location,
+                insert_item.quantity as i64
+            ],
+        )
+        .expect("insert failed");
 }
 
 
 pub enum ItemAdd {
     Ok(Item),
-    Err(String)
+    Err(String),
 }
 
 
 pub fn trim_or_none_value(value: &String) -> Option<String> {
     let v = value.trim();
     if v.is_empty() {
-        return None
+        return None;
     }
     Some(v.to_string())
 }
 
 
-pub fn try_create_item(name: &String, barcode: &String, serial: &String, location: &String, quantity: &String, connection: &Connection) -> ItemAdd {
+pub fn try_create_item(
+    name: &String,
+    barcode: &String,
+    serial: &String,
+    location: &String,
+    quantity: &String,
+    connection: &Connection,
+) -> ItemAdd {
     let name_insert = name.trim().to_string();
     if name_insert.is_empty() {
-        return ItemAdd::Err("Name is required".to_string())
+        return ItemAdd::Err("Name is required".to_string());
     };
     let barcode_insert = trim_or_none_value(barcode);
     let serial_insert = trim_or_none_value(serial);
@@ -165,19 +175,17 @@ pub fn try_create_item(name: &String, barcode: &String, serial: &String, locatio
             Err(_) => return ItemAdd::Err("Quantity must be a non-negative number".to_string()),
         }
     };
-    let mut insert_item: InsertItem = (name_insert, barcode_insert, serial_insert, location_insert).into();
+    let mut insert_item: InsertItem =
+        (name_insert, barcode_insert, serial_insert, location_insert).into();
     insert_item.quantity = qty_val;
     try_insert_item(&insert_item, &connection);
     let id = connection.last_insert_rowid() as u32;
-    ItemAdd::Ok(
-        (id, insert_item).into()
-    )
+    ItemAdd::Ok((id, insert_item).into())
 }
 
 
 pub fn try_delete_item(id: &u32, connection: &Connection) {
-    connection.execute(
-        DELETE_ITEM,
-        params![id]
-    ).expect("delete failed");
+    connection
+        .execute(DELETE_ITEM, params![id])
+        .expect("delete failed");
 }

@@ -1,0 +1,6 @@
+[database]
+path = "inventory.sqlite3"
+recent = [
+    "inventory.sqlite3",
+    "test.sqlite3",
+]

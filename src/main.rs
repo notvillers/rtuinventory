@@ -19,21 +19,26 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState},
 };
 
 use rusqlite::{Connection, params};
 
 mod db;
+mod settings;
 
-use crate::db::{
-    sql::DB_NAME,
-    db::{
-        Item, ItemAdd,
-        connect_db,
-        get_items, try_create_item, try_delete_item
-    }
+use crate::db::db::{
+    Item, ItemAdd,
+    connect_db,
+    get_items, try_create_item, try_delete_item
 };
+use crate::settings::Settings;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Screen {
+    Inventory,
+    Settings,
+}
 
 // Which widget currently receives keyboard input.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -47,6 +52,12 @@ enum Focus {
     ButtonAdd,
     ButtonEdit,
     ButtonDelete,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SettingsFocus {
+    DatabaseList,
+    NewDatabaseInput,
 }
 
 // All mutable application state used by the event loop and renderer.
@@ -63,13 +74,19 @@ struct App {
     conn: Connection,
     editing_row: Option<usize>,
     pending_delete: Option<usize>,
+    screen: Screen,
+    settings: Settings,
+    settings_focus: SettingsFocus,
+    settings_list_state: ListState,
+    new_db_input: String,
 }
 
 impl App {
     // Seed the demo with sample rows and initial focus/state.
-    fn new() -> Self {
+    fn new(settings: Settings) -> Self {
         // Create/open the SQLite DB and ensure the items table exists.
-        let conn = connect_db();
+        let db_path = settings.get_database_path().to_string();
+        let conn = connect_db(&db_path);
 
         // Load all rows from DB into memory.
         let items = get_items(&conn);
@@ -78,6 +95,9 @@ impl App {
         if !items.is_empty() {
             table_state.select(Some(0));
         }
+
+        let mut settings_list_state = ListState::default();
+        settings_list_state.select(Some(0));
 
         Self {
             items,
@@ -88,10 +108,15 @@ impl App {
             location_input: String::new(),
             barcode_input: String::new(),
             serial_input: String::new(),
-            status: format!("Loaded from {0}", DB_NAME).to_string(),
+            status: format!("Loaded from {}", db_path),
             conn,
             editing_row: None,
             pending_delete: None,
+            screen: Screen::Inventory,
+            settings,
+            settings_focus: SettingsFocus::DatabaseList,
+            settings_list_state,
+            new_db_input: String::new(),
         }
     }
 
@@ -121,6 +146,53 @@ impl App {
         let i = self.table_state.selected().unwrap_or(0);
         let prev = if i == 0 { self.items.len() - 1 } else { i - 1 };
         self.table_state.select(Some(prev));
+    }
+
+    fn switch_database(&mut self, db_path: String) {
+        // Update settings and reconnect
+        self.settings.set_database_path(db_path.clone());
+        self.conn = connect_db(&db_path);
+
+        // Reload items
+        self.items = get_items(&self.conn);
+        self.table_state.select(if self.items.is_empty() { None } else { Some(0) });
+        self.status = format!("Switched to: {}", db_path);
+
+        // Clear editing state
+        self.editing_row = None;
+        self.pending_delete = None;
+        self.name_input.clear();
+        self.quantity_input.clear();
+        self.location_input.clear();
+        self.barcode_input.clear();
+        self.serial_input.clear();
+    }
+
+    fn cycle_settings_focus(&mut self) {
+        self.settings_focus = match self.settings_focus {
+            SettingsFocus::DatabaseList => SettingsFocus::NewDatabaseInput,
+            SettingsFocus::NewDatabaseInput => SettingsFocus::DatabaseList,
+        };
+    }
+
+    fn settings_next(&mut self) {
+        let len = self.settings.database.recent.len();
+        if len == 0 {
+            return;
+        }
+        let current = self.settings_list_state.selected().unwrap_or(0);
+        let next = if current >= len - 1 { 0 } else { current + 1 };
+        self.settings_list_state.select(Some(next));
+    }
+
+    fn settings_prev(&mut self) {
+        let len = self.settings.database.recent.len();
+        if len == 0 {
+            return;
+        }
+        let current = self.settings_list_state.selected().unwrap_or(0);
+        let prev = if current == 0 { len - 1 } else { current - 1 };
+        self.settings_list_state.select(Some(prev));
     }
 
     // Rotate focus order: table -> input -> button -> table.
@@ -310,6 +382,98 @@ impl App {
     }
 }
 
+fn handle_inventory_input(app: &mut App, key: crossterm::event::KeyEvent) {
+    // Route keys based on focused control. Handle delete confirmation separately.
+    if let Some(_) = app.pending_delete {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.confirm_delete();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                app.pending_delete = None;
+                app.status = "Delete canceled".to_string();
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Tab => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                app.cycle_focus_back();
+            } else {
+                app.cycle_focus();
+            }
+        }
+        KeyCode::BackTab => app.cycle_focus_back(),
+        KeyCode::Up if app.focus == Focus::Table => app.prev_row(),
+        KeyCode::Down if app.focus == Focus::Table => app.next_row(),
+        KeyCode::Backspace => {
+            if let Some(field) = app.active_input_mut() {
+                field.pop();
+            }
+        }
+        KeyCode::Enter => match app.focus {
+            Focus::ButtonAdd => {
+                // If we're editing, save; otherwise add new
+                if app.editing_row.is_some() {
+                    app.save_edit();
+                } else {
+                    app.try_add_item();
+                }
+            }
+            Focus::ButtonEdit => app.start_edit(),
+            Focus::ButtonDelete => app.request_delete(),
+            _ => app.cycle_focus(),
+        },
+        KeyCode::Char(c) => {
+            if let Some(field) = app.active_input_mut() {
+                field.push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_settings_input(app: &mut App, key: crossterm::event::KeyEvent) {
+    match app.settings_focus {
+        SettingsFocus::DatabaseList => match key.code {
+            KeyCode::Up => app.settings_prev(),
+            KeyCode::Down => app.settings_next(),
+            KeyCode::Enter => {
+                if let Some(idx) = app.settings_list_state.selected() {
+                    if idx < app.settings.database.recent.len() {
+                        let db_path = app.settings.database.recent[idx].clone();
+                        app.switch_database(db_path);
+                        app.screen = Screen::Inventory;
+                    }
+                }
+            }
+            KeyCode::Tab => app.cycle_settings_focus(),
+            _ => {}
+        },
+        SettingsFocus::NewDatabaseInput => match key.code {
+            KeyCode::Enter => {
+                if !app.new_db_input.trim().is_empty() {
+                    let db_path = app.new_db_input.trim().to_string();
+                    app.new_db_input.clear();
+                    app.switch_database(db_path);
+                    app.screen = Screen::Inventory;
+                }
+            }
+            KeyCode::Backspace => {
+                app.new_db_input.pop();
+            }
+            KeyCode::Tab => app.cycle_settings_focus(),
+            KeyCode::Char(c) => {
+                app.new_db_input.push(c);
+            }
+            _ => {}
+        },
+    }
+}
+
 // Terminal setup/teardown wrapper for running the TUI safely.
 fn main() -> io::Result<()> {
     enable_raw_mode()?;
@@ -329,7 +493,8 @@ fn main() -> io::Result<()> {
 
 // Main app loop: draw every frame and handle keyboard events.
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
-    let mut app = App::new();
+    let settings = Settings::load();
+    let mut app = App::new(settings);
 
     loop {
         terminal.draw(|f| draw_ui(f, &mut app))?;
@@ -344,57 +509,33 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 continue;
             }
 
-            // Route keys based on focused control. Handle delete confirmation separately.
-            if let Some(_) = app.pending_delete {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        app.confirm_delete();
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') => {
-                        app.pending_delete = None;
-                        app.status = "Delete canceled".to_string();
-                    }
-                    _ => {}
-                }
-                continue;
-            }
-
+            // Global keyboard shortcuts
             match key.code {
                 KeyCode::Char('q') => return Ok(()),
-                KeyCode::Tab => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        app.cycle_focus_back();
-                    } else {
-                        app.cycle_focus();
+                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.screen = match app.screen {
+                        Screen::Inventory => Screen::Settings,
+                        Screen::Settings => Screen::Inventory,
+                    };
+                    if app.screen == Screen::Settings {
+                        app.settings_list_state.select(Some(0));
                     }
+                    continue;
                 }
-                KeyCode::BackTab => app.cycle_focus_back(),
-                KeyCode::Up if app.focus == Focus::Table => app.prev_row(),
-                KeyCode::Down if app.focus == Focus::Table => app.next_row(),
-                KeyCode::Backspace => {
-                    if let Some(field) = app.active_input_mut() {
-                        field.pop();
+                KeyCode::Esc => {
+                    if app.screen == Screen::Settings {
+                        app.screen = Screen::Inventory;
                     }
-                }
-                KeyCode::Enter => match app.focus {
-                    Focus::ButtonAdd => {
-                        // If we're editing, save; otherwise add new
-                        if app.editing_row.is_some() {
-                            app.save_edit();
-                        } else {
-                            app.try_add_item();
-                        }
-                    }
-                    Focus::ButtonEdit => app.start_edit(),
-                    Focus::ButtonDelete => app.request_delete(),
-                    _ => app.cycle_focus(),
-                },
-                KeyCode::Char(c) => {
-                    if let Some(field) = app.active_input_mut() {
-                        field.push(c);
-                    }
+                    continue;
                 }
                 _ => {}
+            }
+
+            // Route keys based on screen
+            if app.screen == Screen::Settings {
+                handle_settings_input(&mut app, key);
+            } else {
+                handle_inventory_input(&mut app, key);
             }
         }
     }
@@ -402,6 +543,81 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
 
 // Render full UI: table, input, button, and status/help line.
 fn draw_ui(frame: &mut Frame, app: &mut App) {
+    if app.screen == Screen::Settings {
+        draw_settings_ui(frame, app);
+    } else {
+        draw_inventory_ui(frame, app);
+    }
+}
+
+fn draw_settings_ui(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .split(frame.area());
+
+    // Recent databases list
+    let recent_items: Vec<ListItem> = app
+        .settings
+        .database
+        .recent
+        .iter()
+        .enumerate()
+        .map(|(_, db_path)| {
+            let is_current = db_path == app.settings.get_database_path();
+            let content = if is_current {
+                format!("✓ {}", db_path)
+            } else {
+                db_path.clone()
+            };
+            ListItem::new(content)
+        })
+        .collect();
+
+    let recent_list = List::new(recent_items)
+        .block(Block::default().borders(Borders::ALL).title(
+            if app.settings_focus == SettingsFocus::DatabaseList {
+                "Recent Databases (active)"
+            } else {
+                "Recent Databases"
+            }
+        ))
+        .style(Style::default())
+        .highlight_style(
+            Style::default()
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        )
+        .highlight_symbol(" > ");
+
+    let mut list_state = app.settings_list_state.clone();
+    frame.render_stateful_widget(recent_list, chunks[0], &mut list_state);
+
+    // New database input
+    let new_db_block = Block::default()
+        .borders(Borders::ALL)
+        .title(
+            if app.settings_focus == SettingsFocus::NewDatabaseInput {
+                "New Database Path (active)"
+            } else {
+                "New Database Path"
+            }
+        );
+
+    let new_db_block = if app.settings_focus == SettingsFocus::NewDatabaseInput {
+        new_db_block.border_style(Style::default().fg(Color::Green))
+    } else {
+        new_db_block
+    };
+
+    let new_db_input = Paragraph::new(app.new_db_input.as_str()).block(new_db_block);
+    frame.render_widget(new_db_input, chunks[1]);
+}
+
+fn draw_inventory_ui(frame: &mut Frame, app: &mut App) {
     // Layout: table takes the flexible top area; inputs/buttons/help are fixed at bottom.
     // Compute total height for the bottom fixed area: 3 inputs (3) + buttons (3) + help (2) = 14
     let bottom_fixed = 3 + 3 + 3 + 3 + 2; // name, barcode, serial, buttons row, help
@@ -529,7 +745,7 @@ fn draw_ui(frame: &mut Frame, app: &mut App) {
     let del_button = Paragraph::new("[ Delete ]").style(del_style).block(Block::default().borders(Borders::ALL).title("Delete"));
 
     let help = Paragraph::new(Line::from(format!(
-        "{} | Tab/Enter: next focus | Up/Down: move row | q: quit",
+        "{} | Tab/Enter: next focus | Up/Down: move row | Ctrl+S: settings | q: quit",
         app.status
     )));
 

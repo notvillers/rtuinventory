@@ -1,5 +1,4 @@
 // SQLs
-pub const DB_NAME: &'static str = "inventory.sqlite3";
 
 pub const CREATE_SQL: &'static str = r#"
     CREATE TABLE IF NOT EXISTS items (
@@ -33,8 +32,6 @@ pub const INSERT_ITEM: &'static str = r#"
         VALUES
             (?1, ?2, ?3, ?4, ?5)
 "#;
-
-//pub const 
 
 pub const DELETE_ITEM: &'static str = r#"
     DELETE FROM
